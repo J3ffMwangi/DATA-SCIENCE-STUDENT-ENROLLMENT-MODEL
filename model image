@@ -1,1 +1,93 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, roc_auc_score
+import matplotlib.pyplot as plt
 
+np.random.seed(42)
+
+
+n = 2000
+df = pd.DataFrame({
+    "High_School_GPA": np.random.normal(3.4, 0.5, n).clip(1.5, 4.0),
+    "SAT_Score": np.random.randint(900, 1600, n),
+    "Financial_Aid_Amount": np.random.randint(0, 30000, n),
+    "Application_Fee_Waived": np.random.choice([0, 1], n, p=[0.7, 0.3]),
+    "Program_Choice": np.random.choice(
+        ["Engineering", "Arts", "Business", "Science", "Health"],
+        n, p=[0.25, 0.15, 0.25, 0.2, 0.15]
+    ),
+    "First_Gen": np.random.choice([0, 1], n, p=[0.65, 0.35]),
+    "Distance_Region": np.random.choice(
+        ["Local", "Regional", "Out_of_State"],
+        n, p=[0.5, 0.3, 0.2]
+    )
+})
+
+# Enrollment probability model
+p = (
+    0.3
+    + df["High_School_GPA"] * 0.05
+    + df["SAT_Score"] / 1600 * 0.15
+    + df["Financial_Aid_Amount"] / 30000 * 0.1
+    - df["First_Gen"] * 0.05
+    + df["Distance_Region"].map({"Local": 0, "Regional": -0.1, "Out_of_State": -0.1})
+).clip(0.1, 0.9)
+
+df["Enrolled"] = (np.random.rand(n) < p).astype(int)
+
+
+X = df.drop("Enrolled", axis=1)
+y = df["Enrolled"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+
+
+numeric = ["High_School_GPA", "SAT_Score", "Financial_Aid_Amount"]
+binary_cats = ["Application_Fee_Waived", "First_Gen"]
+cats = ["Program_Choice", "Distance_Region"]
+
+preprocess = ColumnTransformer([
+    ("num", StandardScaler(), numeric),
+    ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+     cats + binary_cats)
+])
+
+model = Pipeline([
+    ("prep", preprocess),
+    ("rf", RandomForestClassifier(
+        n_estimators=100, max_depth=10, class_weight="balanced", random_state=42
+    ))
+])
+
+model.fit(X_train, y_train)
+
+pred = model.predict(X_test)
+proba = model.predict_proba(X_test)[:, 1]
+
+print("\nAUC:", roc_auc_score(y_test, proba))
+print("\nClassification Report:\n", classification_report(y_test, pred))
+
+cat_names = model.named_steps["prep"] \
+    .named_transformers_["cat"] \
+    .get_feature_names_out(cats + binary_cats)
+
+all_features = numeric + list(cat_names)
+importances = model.named_steps["rf"].feature_importances_
+
+imp_series = pd.Series(importances, index=all_features).sort_values(ascending=False)
+print("\nTop 5 Features:\n", imp_series.head())
+
+# Plot
+plt.figure(figsize=(8, 5))
+imp_series.head(10).plot(kind="barh")
+plt.title("Top 10 Feature Importances")
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.show()
